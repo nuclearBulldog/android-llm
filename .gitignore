@@ -1,0 +1,25 @@
+# Gradle & build outputs
+/.gradle/
+/.kotlin/
+/build/
+/app/build/
+local.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Android Studio / IntelliJ IDEA
+/.idea/
+*.iml
+captures/
+
+# OS & temporary files
+.DS_Store
+Thumbs.db
+*~
+
+# Local on-device models (keep jniLibs/ and gradle/wrapper/ tracked)
+*.litertlm
+*.tflite
+*.task
