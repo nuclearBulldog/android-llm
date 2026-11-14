@@ -17,16 +17,38 @@ android {
         applicationId = "com.slopware.androidllm"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 1
+        versionName = providers.gradleProperty("versionName").orNull ?: "0.1.0-dev"
         ndk {
             abiFilters += "arm64-v8a"
         }
     }
 
+    val releaseStoreFile = System.getenv("SIGNING_STORE_FILE")?.takeIf { it.isNotBlank() }?.let(::file)
+    val hasReleaseSigning = releaseStoreFile?.isFile == true &&
+        !System.getenv("SIGNING_STORE_PASSWORD").isNullOrBlank() &&
+        !System.getenv("SIGNING_KEY_ALIAS").isNullOrBlank() &&
+        !System.getenv("SIGNING_KEY_PASSWORD").isNullOrBlank()
+
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS")
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            versionNameSuffix = "-debug"
+        }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName(if (hasReleaseSigning) "release" else "debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

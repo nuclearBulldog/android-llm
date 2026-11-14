@@ -31,11 +31,21 @@ class Arm64Tuner(
     @Volatile
     private var activeTimerSlackNs: Long = -1L
 
+    private data class CoreDescriptor(
+        val index: Int,
+        val maxFreqKhz: Int,
+        val curFreqFile: File,
+    )
+
+    // Cache static topology and CPU thermal zone paths once to avoid per-sample sysfs storms.
+    private val cachedCoreDescriptors: List<CoreDescriptor> by lazy { discoverSysfsCores() }
+    private val cachedThermalFile: File? by lazy { resolveCpuThermalFile() }
+
     override fun applyTuning(config: LlmConfig): SiliconTelemetry =
         sampleInternal(config, applyNative = true, runBench = false)
 
     override fun sampleTelemetry(config: LlmConfig, runBench: Boolean): SiliconTelemetry =
-        sampleInternal(config, applyNative = true, runBench = runBench)
+        sampleInternal(config, applyNative = false, runBench = runBench)
 
     override fun warmupModelPages(modelPath: String, prefetchBytes: Long): String =
         withModelFd(modelPath, "Warmup") { fd, file ->
@@ -136,7 +146,7 @@ class Arm64Tuner(
         }
 
         val (availRamMb, totalRamMb) = readMemInfoMb()
-        val flushToZeroActive = if (nativeLoaded) {
+        val flushToZeroActive = if (nativeLoaded && applyNative) {
             (fpcrValue and FPCR_FZ_BIT) != 0L
         } else {
             config.enableFpcrFlushToZero
@@ -163,17 +173,34 @@ class Arm64Tuner(
         )
     }
 
-    private fun readSysfsCores(): List<ArmCoreInfo> = runCatching {
+    private fun discoverSysfsCores(): List<CoreDescriptor> = runCatching {
         val cpuRoot = File("/sys/devices/system/cpu")
         val cpuDirs = cpuRoot.listFiles { f -> f.isDirectory && f.name.matches(Regex("cpu\\d+")) }
             ?: return emptyList()
         cpuDirs.mapNotNull { dir ->
             val idx = dir.name.removePrefix("cpu").toIntOrNull() ?: return@mapNotNull null
             val cpufreqDir = File(dir, "cpufreq")
-            val maxFreq = File(cpufreqDir, "cpuinfo_max_freq").readIntOrNull() ?: 0
-            val curFreq = File(cpufreqDir, "scaling_cur_freq").readIntOrNull() ?: 0
-            ArmCoreInfo(coreIndex = idx, maxFreqKhz = maxFreq, curFreqKhz = curFreq, tier = "")
-        }.sortedBy { it.coreIndex }
+            // Pixel SELinux can restrict cpufreq; fall back to world-readable EAS cpu_capacity.
+            val maxFreq = File(cpufreqDir, "cpuinfo_max_freq").readIntOrNull()
+                ?: File(dir, "cpu_capacity").readIntOrNull()
+                ?: 0
+            CoreDescriptor(
+                index = idx,
+                maxFreqKhz = maxFreq,
+                curFreqFile = File(cpufreqDir, "scaling_cur_freq"),
+            )
+        }.sortedBy { it.index }
+    }.getOrDefault(emptyList())
+
+    private fun readSysfsCores(): List<ArmCoreInfo> = runCatching {
+        cachedCoreDescriptors.map { core ->
+            ArmCoreInfo(
+                coreIndex = core.index,
+                maxFreqKhz = core.maxFreqKhz,
+                curFreqKhz = core.curFreqFile.readIntOrNull() ?: 0,
+                tier = "",
+            )
+        }
     }.getOrDefault(emptyList())
 
     private fun readMemInfoMb(): Pair<Long, Long> = runCatching {
@@ -193,19 +220,28 @@ class Arm64Tuner(
         (effectiveAvail / 1024L) to (totalKb / 1024L)
     }.getOrDefault(0L to 0L)
 
-    private fun readThermalCelsius(): Float? = runCatching {
+    private fun resolveCpuThermalFile(): File? = runCatching {
         val thermalRoot = File("/sys/class/thermal")
         val zones = thermalRoot.listFiles { f -> f.isDirectory && f.name.startsWith("thermal_zone") }
             ?: return null
-        val readings = zones.mapNotNull { zone ->
-            val tempRaw = File(zone, "temp").readIntOrNull() ?: return@mapNotNull null
-            val tempC = if (tempRaw > 1000) tempRaw / 1000f else tempRaw.toFloat()
-            if (tempC !in 5f..130f) return@mapNotNull null
+        val candidates = zones.mapNotNull { zone ->
+            val tempFile = File(zone, "temp")
+            val tempC = readThermalFileCelsius(tempFile) ?: return@mapNotNull null
             val type = runCatching { File(zone, "type").readText().trim().lowercase() }.getOrDefault("")
-            val isCpuLike = type.contains("cpu") || type.contains("soc") || type.contains("tsens")
-            isCpuLike to tempC
+            val isCpuLike = type.contains("cpu") || type.contains("soc") || type.contains("tsens") ||
+                type.contains("big") || type.contains("mid") || type.contains("little")
+            (isCpuLike to tempC) to tempFile
         }
-        readings.firstOrNull { it.first }?.second ?: readings.firstOrNull()?.second
+        candidates.firstOrNull { it.first.first }?.second ?: candidates.firstOrNull()?.second
+    }.getOrNull()
+
+    private fun readThermalCelsius(): Float? =
+        cachedThermalFile?.let { readThermalFileCelsius(it) }
+
+    private fun readThermalFileCelsius(tempFile: File): Float? = runCatching {
+        val tempRaw = tempFile.readIntOrNull() ?: return null
+        val tempC = if (tempRaw > 1000) tempRaw / 1000f else tempRaw.toFloat()
+        tempC.takeIf { it in 5f..130f }
     }.getOrNull()
 
     private fun File.readIntOrNull(): Int? =

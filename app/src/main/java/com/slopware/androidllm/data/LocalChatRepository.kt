@@ -15,13 +15,16 @@ import com.slopware.androidllm.domain.Role
 import com.slopware.androidllm.domain.ThemeMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -43,6 +46,9 @@ class LocalChatRepository(
 ) : ChatRepository {
     private val appContext = context.applicationContext ?: context
     private val lock = Any()
+    private val persistScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+    private val sessionsWriteMutex = Mutex()
+    private val configWriteMutex = Mutex()
     private val downloadMutex = Mutex()
     private val downloadCancelled = AtomicBoolean(false)
     @Volatile
@@ -63,25 +69,35 @@ class LocalChatRepository(
 
     override fun upsertSession(session: ChatSession) {
         synchronized(lock) {
-            val updated = (_sessions.value.filterNot { it.id == session.id } + session)
+            _sessions.value = (_sessions.value.filterNot { it.id == session.id } + session)
                 .sortedByDescending { it.updatedAtMs }
-            _sessions.value = updated
-            writeSessions(updated)
         }
+        scheduleSessionsPersist()
     }
 
     override fun deleteSession(id: String) {
         synchronized(lock) {
-            val updated = _sessions.value.filterNot { it.id == id }
-            _sessions.value = updated
-            writeSessions(updated)
+            _sessions.value = _sessions.value.filterNot { it.id == id }
         }
+        scheduleSessionsPersist()
     }
 
     override fun updateConfig(config: LlmConfig) {
         synchronized(lock) {
             _config.value = config
-            writeConfig(config)
+        }
+        persistScope.launch {
+            configWriteMutex.withLock {
+                writeConfig(synchronized(lock) { _config.value })
+            }
+        }
+    }
+
+    private fun scheduleSessionsPersist() {
+        persistScope.launch {
+            sessionsWriteMutex.withLock {
+                writeSessions(synchronized(lock) { _sessions.value })
+            }
         }
     }
 

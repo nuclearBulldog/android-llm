@@ -3,6 +3,7 @@ package com.slopware.androidllm
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.em
 import com.slopware.androidllm.ui.MarkdownBlock
 import com.slopware.androidllm.ui.parseInlineMarkdown
 import com.slopware.androidllm.ui.splitStreamingBlocks
@@ -118,5 +119,23 @@ class StreamingMarkdownTest {
         val unclosedBold = parseInlineMarkdown("Typing **partial")
         assertEquals("Typing **partial", unclosedBold.text)
         assertTrue(unclosedBold.spanStyles.isEmpty())
+    }
+
+    @Test
+    fun parseInlineMarkdownFormatsHeadingsAndBullets() {
+        val styled = parseInlineMarkdown("# Top\n## Section `api`\n### Sub\n- First **item**\n* Second")
+        assertEquals("Top\nSection api\nSub\n• First item\n• Second", styled.text)
+
+        val h1Span = styled.spanStyles.first { it.start == 0 && it.end == 3 }
+        assertEquals(FontWeight.Bold, h1Span.item.fontWeight)
+        assertEquals(1.18.em, h1Span.item.fontSize)
+
+        val h2Span = styled.spanStyles.first { it.start == 4 && it.end == 15 }
+        assertEquals(FontWeight.Bold, h2Span.item.fontWeight)
+        assertEquals(1.10.em, h2Span.item.fontSize)
+
+        val h3Span = styled.spanStyles.first { it.start == 16 && it.end == 19 }
+        assertEquals(FontWeight.Bold, h3Span.item.fontWeight)
+        assertEquals(1.04.em, h3Span.item.fontSize)
     }
 }

@@ -1,5 +1,6 @@
 package com.slopware.androidllm.ui
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+@Immutable
 data class ChatUiState(
     val sessions: List<ChatSession> = emptyList(),
     val activeSessionId: String? = null,
@@ -511,7 +513,7 @@ class ChatViewModel(
                         if (delta.thoughtDelta.isNotEmpty()) thoughtBuilder.append(delta.thoughtDelta)
                         if (delta.textDelta.isNotEmpty()) answerBuilder.append(delta.textDelta)
                         val nowNs = System.nanoTime()
-                        // Coalesce rapid token updates to a 16ms frame budget while keeping unit tests deterministic.
+                        // Coalesce rapid token updates to a 32ms (~30Hz) frame budget so text layout doesn't saturate SoC.
                         if (!coalesceTo60Fps || lastEmitNs == 0L || nowNs - lastEmitNs >= STREAM_FRAME_BUDGET_NS) {
                             lastEmitNs = nowNs
                             _uiState.update {
@@ -561,7 +563,7 @@ class ChatViewModel(
     }
 
     companion object {
-        private const val STREAM_FRAME_BUDGET_NS = 16_000_000L
+        private const val STREAM_FRAME_BUDGET_NS = 32_000_000L
         private const val TRIM_MEMORY_RUNNING_LOW_LEVEL = 10
 
         fun factory(

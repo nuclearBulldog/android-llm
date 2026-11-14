@@ -11,8 +11,20 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -44,6 +56,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -51,7 +64,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -83,7 +95,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -100,8 +114,10 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -281,6 +297,7 @@ fun ChatScreenContent(
                 )
             },
         ) { innerPadding ->
+            val reduceMotion = LocalAccessibility.current.reduceMotion
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -302,8 +319,14 @@ fun ChatScreenContent(
                     modifier = Modifier.weight(1f),
                 )
 
-                uiState.errorMessage?.let { err ->
-                    ErrorBanner(message = err, onDismiss = onDismissError)
+                var latestError by remember { mutableStateOf("") }
+                if (uiState.errorMessage != null) latestError = uiState.errorMessage
+                AnimatedVisibility(
+                    visible = uiState.errorMessage != null,
+                    enter = if (reduceMotion) EnterTransition.None else expandVertically() + fadeIn(),
+                    exit = if (reduceMotion) ExitTransition.None else shrinkVertically() + fadeOut(),
+                ) {
+                    ErrorBanner(message = latestError, onDismiss = onDismissError)
                 }
 
                 FloatingComposerBar(
@@ -443,9 +466,13 @@ private fun ChatTopBar(
             }
         },
         actions = {
+            val haptics = LocalHapticFeedback.current
             val themeLabel = if (isDarkRendered) "Switch to light mode" else "Switch to dark mode"
             IconButton(
-                onClick = onToggleTheme,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onToggleTheme()
+                },
                 modifier = Modifier
                     .sizeIn(minWidth = touchSize, minHeight = touchSize)
                     .semantics { contentDescription = themeLabel },
@@ -515,10 +542,18 @@ private fun MessageList(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val reduceMotion = LocalAccessibility.current.reduceMotion
+    val touchSize = minTouchSize()
     var autoScrollEnabled by remember { mutableStateOf(true) }
+    val canScrollDown by remember { derivedStateOf { listState.canScrollForward } }
 
-    LaunchedEffect(listState.isScrollInProgress, listState.canScrollForward) {
-        if (listState.isScrollInProgress) autoScrollEnabled = !listState.canScrollForward
+    LaunchedEffect(listState.isScrollInProgress, listState.canScrollForward, listState.lastScrolledBackward) {
+        if (listState.isScrollInProgress && listState.lastScrolledBackward) {
+            autoScrollEnabled = false
+        } else if (!listState.canScrollForward) {
+            autoScrollEnabled = true
+        }
     }
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) autoScrollEnabled = true
@@ -526,10 +561,17 @@ private fun MessageList(
 
     val showStreamingBubble = isGenerating || partialAnswer.isNotEmpty() || partialThought.isNotEmpty()
     val totalItems = messages.size + if (showStreamingBubble) 1 else 0
+    var prevTotalItems by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(totalItems, partialAnswer.length, partialThought.length) {
+        val itemAdded = totalItems > prevTotalItems
+        prevTotalItems = totalItems
         if (autoScrollEnabled && totalItems > 0) {
-            listState.scrollToItem(totalItems - 1)
+            if (itemAdded && !reduceMotion) {
+                listState.animateScrollToItem(totalItems - 1, scrollOffset = 100_000)
+            } else if (itemAdded || listState.canScrollForward) {
+                listState.scrollToItem(totalItems - 1, scrollOffset = 100_000)
+            }
         }
     }
 
@@ -544,39 +586,75 @@ private fun MessageList(
         return
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        itemsIndexed(messages, key = { _, msg -> msg.id }) { index, msg ->
-            when (msg.role) {
-                Role.USER -> UserBubble(message = msg)
-                Role.MODEL -> AssistantBubble(
-                    messageKey = msg.id,
-                    text = msg.text,
-                    thought = msg.thought,
-                    isStreaming = false,
-                    canRegenerate = !isGenerating && index == messages.lastIndex,
-                    onRegenerate = onRegenerateLast,
-                    onCopy = { onCopyText(msg.text) },
-                    onCopyCode = onCopyText,
-                )
+    Box(modifier = modifier.fillMaxWidth()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            itemsIndexed(messages, key = { _, msg -> msg.id }) { index, msg ->
+                when (msg.role) {
+                    Role.USER -> UserBubble(message = msg)
+                    Role.MODEL -> AssistantBubble(
+                        messageKey = msg.id,
+                        text = msg.text,
+                        thought = msg.thought,
+                        isStreaming = false,
+                        canRegenerate = !isGenerating && index == messages.lastIndex,
+                        onRegenerate = onRegenerateLast,
+                        onCopy = { onCopyText(msg.text) },
+                        onCopyCode = onCopyText,
+                    )
+                }
+            }
+            if (showStreamingBubble) {
+                item(key = "streaming_assistant") {
+                    AssistantBubble(
+                        messageKey = "streaming_assistant",
+                        text = partialAnswer,
+                        thought = partialThought,
+                        isStreaming = isGenerating,
+                        canRegenerate = false,
+                        onRegenerate = {},
+                        onCopy = { onCopyText(partialAnswer) },
+                        onCopyCode = onCopyText,
+                    )
+                }
             }
         }
-        if (showStreamingBubble) {
-            item(key = "streaming_assistant") {
-                AssistantBubble(
-                    messageKey = "streaming_assistant",
-                    text = partialAnswer,
-                    thought = partialThought,
-                    isStreaming = isGenerating,
-                    canRegenerate = false,
-                    onRegenerate = {},
-                    onCopy = { onCopyText(partialAnswer) },
-                    onCopyCode = onCopyText,
-                )
+        AnimatedVisibility(
+            visible = !autoScrollEnabled && canScrollDown,
+            enter = if (reduceMotion) EnterTransition.None else fadeIn() + scaleIn(initialScale = 0.88f),
+            exit = if (reduceMotion) ExitTransition.None else fadeOut() + scaleOut(targetScale = 0.88f),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 12.dp),
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                shadowElevation = 4.dp,
+                tonalElevation = 4.dp,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+                onClick = {
+                    autoScrollEnabled = true
+                    scope.launch {
+                        if (totalItems > 0) {
+                            if (reduceMotion) listState.scrollToItem(totalItems - 1, 100_000)
+                            else listState.animateScrollToItem(totalItems - 1, 100_000)
+                        }
+                    }
+                },
+                modifier = Modifier.sizeIn(minWidth = touchSize, minHeight = touchSize),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Jump to bottom",
+                    )
+                }
             }
         }
     }
@@ -690,6 +768,7 @@ private fun AssistantBubble(
     Surface(
         shape = RoundedCornerShape(20.dp, 20.dp, 20.dp, 4.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
@@ -707,6 +786,7 @@ private fun AssistantBubble(
                 StreamingMarkdownText(
                     markdown = text,
                     textColor = MaterialTheme.colorScheme.onSurface,
+                    isStreaming = isStreaming,
                     onCopyCode = onCopyCode,
                 )
             } else if (isStreaming && thought.isEmpty()) {
@@ -747,10 +827,16 @@ private fun ThinkingCard(
     var userOverride by rememberSaveable(messageKey) { mutableStateOf<Boolean?>(null) }
     val expanded = userOverride ?: isStreamingThought
     val reduceMotion = LocalAccessibility.current.reduceMotion
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = if (reduceMotion) snap() else spring(stiffness = Spring.StiffnessMediumLow),
+        label = "thinkingChevron",
+    )
 
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -776,9 +862,10 @@ private fun ThinkingCard(
                     )
                 }
                 Icon(
-                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = if (expanded) "Collapse thoughts" else "Expand thoughts",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.graphicsLayer { rotationZ = chevronRotation },
                 )
             }
             if (reduceMotion) {
@@ -793,8 +880,8 @@ private fun ThinkingCard(
             } else {
                 AnimatedVisibility(
                     visible = expanded,
-                    enter = EnterTransition.None,
-                    exit = ExitTransition.None,
+                    enter = expandVertically(spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(tween(180)),
+                    exit = shrinkVertically(spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(tween(150)),
                 ) {
                     Text(
                         text = thought,
@@ -846,19 +933,28 @@ private fun FloatingComposerBar(
     onStopGeneration: () -> Unit,
 ) {
     val touchSize = minTouchSize()
+    val reduceMotion = LocalAccessibility.current.reduceMotion
+    val haptics = LocalHapticFeedback.current
+    var latestAttachment by remember { mutableStateOf("") }
+    if (attachedImagePath != null) latestAttachment = attachedImagePath
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (attachedImagePath != null) {
+        AnimatedVisibility(
+            visible = attachedImagePath != null,
+            enter = if (reduceMotion) EnterTransition.None else expandVertically() + fadeIn(),
+            exit = if (reduceMotion) ExitTransition.None else shrinkVertically() + fadeOut(),
+        ) {
             InputChip(
                 selected = true,
                 onClick = onClearAttachment,
                 label = {
                     Text(
-                        text = attachedImagePath.substringAfterLast('/'),
+                        text = latestAttachment.substringAfterLast('/'),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -901,32 +997,44 @@ private fun FloatingComposerBar(
                     ),
                     modifier = Modifier.weight(1f),
                 )
-                if (isGenerating) {
-                    FilledIconButton(
-                        onClick = onStopGeneration,
-                        modifier = Modifier.sizeIn(minWidth = touchSize, minHeight = touchSize),
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                        ),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(14.dp)
-                                .background(
-                                    MaterialTheme.colorScheme.onErrorContainer,
-                                    RoundedCornerShape(3.dp),
-                                ),
-                        )
-                    }
-                } else {
-                    val canSend = !isInitializing && (inputText.isNotBlank() || attachedImagePath != null)
-                    FilledIconButton(
-                        onClick = onSendMessage,
-                        enabled = canSend,
-                        modifier = Modifier.sizeIn(minWidth = touchSize, minHeight = touchSize),
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send message")
+                Crossfade(
+                    targetState = isGenerating,
+                    animationSpec = if (reduceMotion) snap() else tween(durationMillis = 180),
+                    label = "composerAction",
+                ) { generating ->
+                    if (generating) {
+                        FilledIconButton(
+                            onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onStopGeneration()
+                            },
+                            modifier = Modifier.sizeIn(minWidth = touchSize, minHeight = touchSize),
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            ),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.onErrorContainer,
+                                        RoundedCornerShape(3.dp),
+                                    ),
+                            )
+                        }
+                    } else {
+                        val canSend = !isInitializing && (inputText.isNotBlank() || attachedImagePath != null)
+                        FilledIconButton(
+                            onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onSendMessage()
+                            },
+                            enabled = canSend,
+                            modifier = Modifier.sizeIn(minWidth = touchSize, minHeight = touchSize),
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send message")
+                        }
                     }
                 }
             }

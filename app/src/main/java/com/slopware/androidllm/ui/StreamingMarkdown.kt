@@ -3,6 +3,7 @@ package com.slopware.androidllm.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -26,6 +28,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 
 sealed interface MarkdownBlock {
     data class Text(val text: String) : MarkdownBlock
@@ -68,13 +71,42 @@ fun splitStreamingBlocks(raw: String): List<MarkdownBlock> {
 }
 
 /**
- * Styles inline `code` spans and **bold** text into a Compose [AnnotatedString].
- * Unclosed delimiters mid-stream simply fall through as plain text without flickering.
+ * Styles Markdown headings (`#`/`##`/`###`), bullet prefixes (`-`/`*`), inline `code` spans, and
+ * **bold** text into a Compose [AnnotatedString]. Unclosed inline delimiters fall through cleanly.
  */
 fun parseInlineMarkdown(
     text: String,
     codeBackground: Color = Color(0x24888888),
 ): AnnotatedString = buildAnnotatedString {
+    val lines = text.split('\n')
+    lines.forEachIndexed { idx, line ->
+        if (idx > 0) append('\n')
+        val trimmed = line.trimStart()
+        val indent = if (trimmed.length < line.length) line.substring(0, line.length - trimmed.length) else ""
+        when {
+            line.startsWith("### ") -> withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 1.04.em)) {
+                appendInlineTokens(line.substring(4), codeBackground)
+            }
+            line.startsWith("## ") -> withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 1.10.em)) {
+                appendInlineTokens(line.substring(3), codeBackground)
+            }
+            line.startsWith("# ") -> withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 1.18.em)) {
+                appendInlineTokens(line.substring(2), codeBackground)
+            }
+            trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
+                append(indent)
+                append("• ")
+                appendInlineTokens(trimmed.substring(2), codeBackground)
+            }
+            else -> appendInlineTokens(line, codeBackground)
+        }
+    }
+}
+
+private fun AnnotatedString.Builder.appendInlineTokens(
+    text: String,
+    codeBackground: Color,
+) {
     var cursor = 0
     for (match in INLINE_TOKEN_REGEX.findAll(text)) {
         if (match.range.first > cursor) append(text.substring(cursor, match.range.first))
@@ -96,33 +128,50 @@ fun StreamingMarkdownText(
     markdown: String,
     modifier: Modifier = Modifier,
     textColor: Color = MaterialTheme.colorScheme.onSurface,
+    isStreaming: Boolean = false,
     onCopyCode: (String) -> Unit = {},
 ) {
     val codeBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+    val cursorColor = MaterialTheme.colorScheme.primary
     val blocks = remember(markdown) { splitStreamingBlocks(markdown) }
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        blocks.forEach { block ->
-            when (block) {
-                is MarkdownBlock.Text -> {
-                    val styled = remember(block.text, codeBg) {
-                        parseInlineMarkdown(block.text, codeBg)
+    val body: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            blocks.forEachIndexed { index, block ->
+                when (block) {
+                    is MarkdownBlock.Text -> {
+                        val styled = remember(block.text, codeBg) {
+                            parseInlineMarkdown(block.text, codeBg)
+                        }
+                        val display = if (isStreaming && index == blocks.lastIndex) {
+                            buildAnnotatedString {
+                                append(styled)
+                                withStyle(SpanStyle(color = cursorColor, fontWeight = FontWeight.Bold)) {
+                                    append(" ▍")
+                                }
+                            }
+                        } else {
+                            styled
+                        }
+                        Text(
+                            text = display,
+                            color = textColor,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
                     }
-                    Text(
-                        text = styled,
-                        color = textColor,
-                        style = MaterialTheme.typography.bodyLarge,
+                    is MarkdownBlock.Code -> CodeBlockCard(
+                        code = block.code,
+                        language = block.language,
+                        onCopy = { onCopyCode(block.code) },
                     )
                 }
-                is MarkdownBlock.Code -> CodeBlockCard(
-                    code = block.code,
-                    language = block.language,
-                    onCopy = { onCopyCode(block.code) },
-                )
             }
         }
+    }
+    // Defer SelectionContainer layout tracking until streaming completes to avoid per-token selection passes.
+    if (isStreaming) {
+        Box(modifier = modifier) { body() }
+    } else {
+        SelectionContainer(modifier = modifier) { body() }
     }
 }
 

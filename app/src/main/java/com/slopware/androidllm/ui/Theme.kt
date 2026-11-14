@@ -1,7 +1,12 @@
 package com.slopware.androidllm.ui
 
 import android.os.Build
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -123,6 +128,7 @@ fun AppTheme(
         darkTheme -> DarkColors
         else -> LightColors
     }
+    val animatedScheme = animateColorScheme(colorScheme, accessibility.reduceMotion)
     val baseDensity = LocalDensity.current
     val scaledDensity = Density(
         density = baseDensity.density,
@@ -134,8 +140,25 @@ fun AppTheme(
         LocalDensity provides scaledDensity,
     ) {
         MaterialTheme(
-            colorScheme = colorScheme,
+            colorScheme = animatedScheme,
             content = content,
         )
     }
+}
+
+@Composable
+private fun Color.animateWith(spec: AnimationSpec<Color>): Color =
+    animateColorAsState(targetValue = this, animationSpec = spec, label = "themeColor").value
+
+@Composable
+private fun animateColorScheme(target: ColorScheme, reduceMotion: Boolean): ColorScheme {
+    val spec: AnimationSpec<Color> = if (reduceMotion) snap() else tween(durationMillis = 240)
+    return target.copy(
+        primary = target.primary.animateWith(spec),
+        primaryContainer = target.primaryContainer.animateWith(spec),
+        background = target.background.animateWith(spec),
+        surface = target.surface.animateWith(spec),
+        surfaceContainer = target.surfaceContainer.animateWith(spec),
+        surfaceContainerHigh = target.surfaceContainerHigh.animateWith(spec),
+    )
 }

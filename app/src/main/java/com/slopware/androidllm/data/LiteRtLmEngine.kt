@@ -16,6 +16,7 @@ import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.ThinkingConfig
 import com.slopware.androidllm.domain.BackendType
 import com.slopware.androidllm.domain.ChatMessage
+import com.slopware.androidllm.domain.CoreAffinityMode
 import com.slopware.androidllm.domain.HardwareController
 import com.slopware.androidllm.domain.LlmConfig
 import com.slopware.androidllm.domain.LlmEngine
@@ -123,11 +124,6 @@ class LiteRtLmEngine(
                 closeConversationLocked()
                 if (generation.get() != startGen) {
                     closeEngineLocked()
-                } else if (config.modelPath.isNotBlank()) {
-                    val post = hardwareController?.sampleTelemetry(config, runBench = false)
-                    if (post != null && post.availRamMb in 1L until LOW_RAM_EVICT_MB) {
-                        hardwareController.evictColdModelPages(config.modelPath)
-                    }
                 }
             }
         }
@@ -167,7 +163,7 @@ class LiteRtLmEngine(
             throw IllegalStateException("Model file not found: ${config.modelPath}")
         }
 
-        val telemetry = applyHardwareGuard(config)
+        val telemetry = applyHardwareGuard(config, forEngineInit = true)
         val lowRam = telemetry != null && telemetry.availRamMb in 1L until LOW_RAM_EVICT_MB
         if (config.enableVmPageWarmup && !lowRam) {
             hardwareController?.warmupModelPages(config.modelPath)
@@ -250,15 +246,26 @@ class LiteRtLmEngine(
         return parts.takeIf { it.isNotEmpty() }?.let { Contents.of(it) }
     }
 
-    private fun applyHardwareGuard(config: LlmConfig): SiliconTelemetry? {
+    private fun applyHardwareGuard(
+        config: LlmConfig,
+        forEngineInit: Boolean = false,
+    ): SiliconTelemetry? {
         val controller = hardwareController ?: return null
         val baseline = controller.sampleTelemetry(config, runBench = false)
         if (baseline.availRamMb in 1L until LOW_RAM_EVICT_MB && config.modelPath.isNotBlank()) {
             controller.evictColdModelPages(config.modelPath)
         }
         val effectiveMode = controller.effectiveAffinity(config.coreAffinity, baseline, config)
+        // Worker pthreads inherit the caller's cpus_allowed mask during Engine.initialize(); avoid pinning multi-thread init to 1 tier.
+        val appliedMode = when {
+            forEngineInit && config.cpuThreadCount > 1 && effectiveMode == CoreAffinityMode.PRIME_ONLY ->
+                CoreAffinityMode.BIG_AND_PRIME
+            forEngineInit && config.cpuThreadCount > 1 && effectiveMode == CoreAffinityMode.EFFICIENCY_ONLY ->
+                CoreAffinityMode.ALL_CORES
+            else -> effectiveMode
+        }
         controller.configureLowLatencyThread(config.enableLowLatencyThread)
-        return controller.applyTuning(config.copy(coreAffinity = effectiveMode))
+        return controller.applyTuning(config.copy(coreAffinity = appliedMode))
     }
 
     private fun closeConversationLocked() {

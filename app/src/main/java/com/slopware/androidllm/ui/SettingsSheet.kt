@@ -48,6 +48,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -541,7 +543,10 @@ private fun ToggleSettingRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = minTouchSize()),
+            .heightIn(min = minTouchSize())
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(role = Role.Switch) { onCheckedChange(!checked) }
+            .padding(horizontal = 4.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -553,7 +558,7 @@ private fun ToggleSettingRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 

@@ -1,5 +1,7 @@
 package com.slopware.androidllm.domain
 
+import androidx.compose.runtime.Immutable
+
 enum class Role {
     USER,
     MODEL,
@@ -24,6 +26,7 @@ enum class CoreAffinityMode {
     EFFICIENCY_ONLY,
 }
 
+@Immutable
 data class AccessibilityConfig(
     val highContrast: Boolean = false,
     val fontScale: Float = 1.0f,
@@ -31,6 +34,7 @@ data class AccessibilityConfig(
     val largeTouchTargets: Boolean = false,
 )
 
+@Immutable
 data class LlmConfig(
     val modelPath: String = "",
     val backend: BackendType = BackendType.GPU,
@@ -54,6 +58,7 @@ data class LlmConfig(
     val accessibility: AccessibilityConfig = AccessibilityConfig(),
 )
 
+@Immutable
 data class HfModelEntry(
     val id: String,
     val title: String,
@@ -69,6 +74,7 @@ data class HfModelEntry(
         get() = "https://huggingface.co/$repoId/resolve/main/$fileName?download=true"
 }
 
+@Immutable
 data class ModelDownloadState(
     val repoFileKey: String = "",
     val fileName: String = "",
@@ -80,6 +86,7 @@ data class ModelDownloadState(
     val completedPath: String? = null,
 )
 
+@Immutable
 data class ArmCoreInfo(
     val coreIndex: Int,
     val maxFreqKhz: Int,
@@ -87,6 +94,7 @@ data class ArmCoreInfo(
     val tier: String,
 )
 
+@Immutable
 data class SiliconTelemetry(
     val nativeLoaded: Boolean,
     val arch: String,
@@ -107,6 +115,7 @@ data class SiliconTelemetry(
     val thermalThrottled: Boolean = false,
 )
 
+@Immutable
 data class ChatMessage(
     val id: String,
     val role: Role,
@@ -116,6 +125,7 @@ data class ChatMessage(
     val timestampMs: Long,
 )
 
+@Immutable
 data class ChatSession(
     val id: String,
     val title: String,
