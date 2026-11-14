@@ -1,6 +1,7 @@
 # AndroidLLM
 
 On-device AI chat application for Android (`com.slopware.androidllm`, minSdk 26) built with Jetpack Compose and LiteRT-LM.
+[![Build ARM64 APK](https://github.com/nuclearBulldog/android-llm/actions/workflows/build-apk.yml/badge.svg)](https://github.com/nuclearBulldog/android-llm/actions/workflows/build-apk.yml)
 
 ## Features
 
