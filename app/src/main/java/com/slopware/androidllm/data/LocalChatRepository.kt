@@ -397,6 +397,7 @@ private fun LlmConfig.toJson(): JSONObject = JSONObject().apply {
     put("coreAffinity", coreAffinity.name)
     put("cpuThreadCount", cpuThreadCount)
     put("enableThinking", enableThinking)
+    put("enableAgentTools", enableAgentTools)
     put("thinkingBudget", thinkingBudget)
     put("temperature", temperature)
     put("topK", topK)
@@ -423,6 +424,7 @@ private fun JSONObject.toLlmConfig(): LlmConfig {
         coreAffinity = optEnum("coreAffinity", d.coreAffinity),
         cpuThreadCount = optInt("cpuThreadCount", d.cpuThreadCount),
         enableThinking = optBoolean("enableThinking", d.enableThinking),
+        enableAgentTools = optBoolean("enableAgentTools", d.enableAgentTools),
         thinkingBudget = optInt("thinkingBudget", d.thinkingBudget),
         temperature = optDouble("temperature", d.temperature),
         topK = optInt("topK", d.topK),

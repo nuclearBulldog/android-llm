@@ -1,11 +1,13 @@
 package com.slopware.androidllm
 
+import android.os.PowerManager
 import com.slopware.androidllm.domain.ArmCoreInfo
 import com.slopware.androidllm.domain.CoreAffinityMode
 import com.slopware.androidllm.domain.LlmConfig
 import com.slopware.androidllm.hardware.Arm64Tuner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -109,6 +111,38 @@ class Arm64TunerTest {
         assertEquals(
             CoreAffinityMode.ALL_CORES,
             tuner.effectiveAffinity(CoreAffinityMode.ALL_CORES, baseTel.copy(thermalCelsius = 90.0f), hotGuardOn),
+        )
+    }
+
+    @Test
+    fun frameworkThermalReaderValidatesBatteryTempAndHonorsPowerManagerThermalStatus() {
+        assertNull(Arm64Tuner(null).sampleTelemetry(LlmConfig(), runBench = false).thermalCelsius)
+
+        // Valid battery temperatures (in tenths of °C) and out-of-range rejection.
+        assertEquals(36.5f, Arm64Tuner.resolveFrameworkThermalCelsius(365, PowerManager.THERMAL_STATUS_NONE))
+        assertEquals(42.0f, Arm64Tuner.resolveFrameworkThermalCelsius(420, PowerManager.THERMAL_STATUS_LIGHT))
+        assertNull(Arm64Tuner.resolveFrameworkThermalCelsius(-1, PowerManager.THERMAL_STATUS_NONE))
+        assertNull(Arm64Tuner.resolveFrameworkThermalCelsius(40, PowerManager.THERMAL_STATUS_NONE))
+        assertNull(Arm64Tuner.resolveFrameworkThermalCelsius(1350, PowerManager.THERMAL_STATUS_LIGHT))
+
+        // Severe+ thermal status forces at least THERMAL_THROTTLE_C (78°C) so PRIME_ONLY downshifts.
+        val severeTemp = Arm64Tuner.resolveFrameworkThermalCelsius(390, PowerManager.THERMAL_STATUS_SEVERE)
+        assertEquals(Arm64Tuner.THERMAL_THROTTLE_C, severeTemp)
+        assertEquals(
+            CoreAffinityMode.BIG_AND_PRIME,
+            Arm64Tuner.resolveEffectiveAffinity(CoreAffinityMode.PRIME_ONLY, severeTemp, enableThermalGuard = true),
+        )
+        assertEquals(
+            83.5f,
+            Arm64Tuner.resolveFrameworkThermalCelsius(835, PowerManager.THERMAL_STATUS_CRITICAL),
+        )
+
+        // Moderate thermal status preserves normal battery temp when available, or reports throttle threshold when missing.
+        assertEquals(44.0f, Arm64Tuner.resolveFrameworkThermalCelsius(440, PowerManager.THERMAL_STATUS_MODERATE))
+        assertEquals(79.0f, Arm64Tuner.resolveFrameworkThermalCelsius(790, PowerManager.THERMAL_STATUS_MODERATE))
+        assertEquals(
+            Arm64Tuner.THERMAL_THROTTLE_C,
+            Arm64Tuner.resolveFrameworkThermalCelsius(-1, PowerManager.THERMAL_STATUS_MODERATE),
         )
     }
 

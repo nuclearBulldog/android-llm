@@ -48,6 +48,7 @@ data class LlmConfig(
     val coreAffinity: CoreAffinityMode = CoreAffinityMode.BIG_AND_PRIME,
     val cpuThreadCount: Int = 4,
     val enableThinking: Boolean = true,
+    val enableAgentTools: Boolean = true,
     val thinkingBudget: Int = 1024,
     val temperature: Double = 0.8,
     val topK: Int = 40,

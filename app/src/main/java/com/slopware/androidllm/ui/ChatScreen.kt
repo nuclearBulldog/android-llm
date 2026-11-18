@@ -671,9 +671,9 @@ private fun EmptyChatPlaceholder(
 ) {
     val hasModel = config.modelPath.isNotBlank()
     val starters = listOf(
-        "Explain ARM64 FPCR flush-to-zero",
+        "Check device time, RAM, and processor status",
+        "Explain Subnormal Float Flush-to-Zero on ARM64",
         "Write a Kotlin coroutine retry helper",
-        "Compare CPU vs GPU mobile inference",
     )
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -694,9 +694,10 @@ private fun EmptyChatPlaceholder(
                 val hwStatus = buildString {
                     append(if (hasModel) config.modelPath.substringAfterLast('/') else "No model active")
                     append(" · ${config.backend.name}")
+                    if (config.enableAgentTools) append(" · Assistant Tools")
                     if (telemetry != null) {
                         append(" · ${telemetry.arch}")
-                        if (telemetry.flushToZeroActive) append(" · FZ")
+                        if (telemetry.flushToZeroActive) append(" · Flush-to-Zero")
                     }
                 }
                 Text(
@@ -1074,7 +1075,7 @@ private fun decodeSampledBitmap(path: String, maxDim: Int): Bitmap? = runCatchin
     BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
 }.getOrNull()
 
-private suspend fun copyImageToAppStorage(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
+internal suspend fun copyImageToAppStorage(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
     runCatching {
         val dir = File(context.filesDir, "attachments").apply { mkdirs() }
         val out = File(dir, "img_${System.currentTimeMillis()}.jpg")

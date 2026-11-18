@@ -1,7 +1,12 @@
 package com.slopware.androidllm.hardware
 
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.PowerManager
 import com.slopware.androidllm.domain.ArmCoreInfo
 import com.slopware.androidllm.domain.CoreAffinityMode
 import com.slopware.androidllm.domain.HardwareController
@@ -15,7 +20,7 @@ import java.io.File
  * with safe fallbacks for JVM unit tests and non-ARM64 emulators.
  */
 class Arm64Tuner(
-    @Suppress("unused") private val context: Context? = null,
+    private val context: Context? = null,
 ) : HardwareController {
     private val nativeLoaded: Boolean = runCatching {
         System.loadLibrary("slop_hw")
@@ -37,9 +42,8 @@ class Arm64Tuner(
         val curFreqFile: File,
     )
 
-    // Cache static topology and CPU thermal zone paths once to avoid per-sample sysfs storms.
+    // Cache static CPU topology paths once to avoid per-sample sysfs directory scans.
     private val cachedCoreDescriptors: List<CoreDescriptor> by lazy { discoverSysfsCores() }
-    private val cachedThermalFile: File? by lazy { resolveCpuThermalFile() }
 
     override fun applyTuning(config: LlmConfig): SiliconTelemetry =
         sampleInternal(config, applyNative = true, runBench = false)
@@ -220,29 +224,26 @@ class Arm64Tuner(
         (effectiveAvail / 1024L) to (totalKb / 1024L)
     }.getOrDefault(0L to 0L)
 
-    private fun resolveCpuThermalFile(): File? = runCatching {
-        val thermalRoot = File("/sys/class/thermal")
-        val zones = thermalRoot.listFiles { f -> f.isDirectory && f.name.startsWith("thermal_zone") }
-            ?: return null
-        val candidates = zones.mapNotNull { zone ->
-            val tempFile = File(zone, "temp")
-            val tempC = readThermalFileCelsius(tempFile) ?: return@mapNotNull null
-            val type = runCatching { File(zone, "type").readText().trim().lowercase() }.getOrDefault("")
-            val isCpuLike = type.contains("cpu") || type.contains("soc") || type.contains("tsens") ||
-                type.contains("big") || type.contains("mid") || type.contains("little")
-            (isCpuLike to tempC) to tempFile
-        }
-        candidates.firstOrNull { it.first.first }?.second ?: candidates.firstOrNull()?.second
-    }.getOrNull()
-
-    private fun readThermalCelsius(): Float? =
-        cachedThermalFile?.let { readThermalFileCelsius(it) }
-
-    private fun readThermalFileCelsius(tempFile: File): Float? = runCatching {
-        val tempRaw = tempFile.readIntOrNull() ?: return null
-        val tempC = if (tempRaw > 1000) tempRaw / 1000f else tempRaw.toFloat()
-        tempC.takeIf { it in 5f..130f }
-    }.getOrNull()
+    /**
+     * Reads device temperature via permissionless Android framework APIs (`ACTION_BATTERY_CHANGED`
+     * sticky broadcast + `PowerManager.getCurrentThermalStatus`) instead of listing
+     * `/sys/class/thermal`, which triggers SELinux `sysfs_thermal` directory read denials on
+     * Android 15+/17+ `untrusted_app` domains.
+     */
+    private fun readThermalCelsius(): Float? {
+        val ctx = context ?: return null
+        return runCatching {
+            val sticky = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val rawTenthsC = sticky?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
+            val thermalStatus = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                (ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager)?.currentThermalStatus
+                    ?: PowerManager.THERMAL_STATUS_NONE
+            } else {
+                PowerManager.THERMAL_STATUS_NONE
+            }
+            resolveFrameworkThermalCelsius(rawTenthsC, thermalStatus)
+        }.getOrNull()
+    }
 
     private fun File.readIntOrNull(): Int? =
         if (isFile) runCatching { readText().trim().toIntOrNull() }.getOrNull() else null
@@ -269,6 +270,25 @@ class Arm64Tuner(
 
         /** Returns `true` only when `/proc/meminfo` reported a positive low-RAM figure below 450 MB. */
         fun shouldEvictOnLowRam(availRamMb: Long): Boolean = availRamMb in 1L until LOW_RAM_EVICT_MB
+
+        /**
+         * Combines sticky battery temperature (`EXTRA_TEMPERATURE` tenths of °C, validated in `5f..130f`)
+         * and `PowerManager` thermal status so OS-reported severe/moderate thermal load triggers
+         * [THERMAL_THROTTLE_C] even when battery thermistor readings lag behind SoC die heat.
+         */
+        fun resolveFrameworkThermalCelsius(
+            batteryTenthsCelsius: Int,
+            thermalStatus: Int = PowerManager.THERMAL_STATUS_NONE,
+        ): Float? {
+            val batteryC = (batteryTenthsCelsius / 10f).takeIf { batteryTenthsCelsius > 0 && it in 5f..130f }
+            return when {
+                thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE ->
+                    maxOf(batteryC ?: THERMAL_THROTTLE_C, THERMAL_THROTTLE_C)
+                thermalStatus == PowerManager.THERMAL_STATUS_MODERATE ->
+                    batteryC ?: THERMAL_THROTTLE_C
+                else -> batteryC
+            }
+        }
 
         /** Downshifts `PRIME_ONLY` -> `BIG_AND_PRIME` at or above 78C when thermal guard is active. */
         fun resolveEffectiveAffinity(

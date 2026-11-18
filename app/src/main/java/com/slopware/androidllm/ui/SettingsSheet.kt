@@ -116,7 +116,7 @@ fun SettingsSheetBody(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = "Settings & Hardware Tuner",
+                text = "Settings & Performance Tuning",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -147,25 +147,26 @@ fun SettingsSheetBody(
             }
         }
         ToggleSettingRow(
-            title = "High Contrast",
-            subtitle = "WCAG AAA monochrome contrast surfaces",
+            title = "High Contrast Mode",
+            subtitle = "Use maximum-contrast monochrome surfaces and borders (WCAG AAA)",
             checked = a11y.highContrast,
             onCheckedChange = { onUpdateConfig(config.copy(accessibility = a11y.copy(highContrast = it))) },
         )
         ToggleSettingRow(
             title = "Reduce Motion",
-            subtitle = "Minimize animations and instant scroll",
+            subtitle = "Minimize animations and use instant list scrolling",
             checked = a11y.reduceMotion,
             onCheckedChange = { onUpdateConfig(config.copy(accessibility = a11y.copy(reduceMotion = it))) },
         )
         ToggleSettingRow(
             title = "Large Touch Targets",
-            subtitle = "Expand interactive controls to 52dp+",
+            subtitle = "Expand interactive buttons and controls to at least 52dp",
             checked = a11y.largeTouchTargets,
             onCheckedChange = { onUpdateConfig(config.copy(accessibility = a11y.copy(largeTouchTargets = it))) },
         )
         SliderSettingRow(
-            label = "Font Scale",
+            label = "Text Size Scale",
+            subtitle = "Adjusts in-app chat and control typography size",
             value = a11y.fontScale,
             range = 0.85f..1.40f,
             formatValue = { String.format(Locale.US, "%.2fx", it) },
@@ -177,44 +178,62 @@ fun SettingsSheetBody(
 
         HorizontalDivider()
 
-        // Low-Level ARM64 Silicon & Backend Tuner
-        SectionTitle("ARM64 Silicon & Backend Tuner")
-        BackendSelectorRow("Primary Backend", config.backend) {
+        // On-Device Hardware & Performance Tuning
+        SectionTitle("On-Device Hardware & Performance Tuning")
+        BackendSelectorRow(
+            label = "Primary Inference Processor",
+            subtitle = "Selects where language model weights run: GPU (OpenCL acceleration, fastest for most models), CPU (multi-core ARM64 NEON), or NPU (dedicated neural accelerator)",
+            selected = config.backend,
+        ) {
             onUpdateConfig(config.copy(backend = it))
         }
-        BackendSelectorRow("Vision Backend", config.visionBackend) {
+        BackendSelectorRow(
+            label = "Image & Vision Processor",
+            subtitle = "Hardware processor used to encode attached photos and images during multimodal chat",
+            selected = config.visionBackend,
+        ) {
             onUpdateConfig(config.copy(visionBackend = it))
         }
-        BackendSelectorRow("Audio Backend", config.audioBackend) {
+        BackendSelectorRow(
+            label = "Audio & Speech Processor",
+            subtitle = "Hardware processor used for audio feature extraction and speech encoding",
+            selected = config.audioBackend,
+        ) {
             onUpdateConfig(config.copy(audioBackend = it))
         }
         ToggleSettingRow(
-            title = "Multi-Token Prediction (MTP)",
-            subtitle = "Speculative decoding speedup on GPU/CPU",
+            title = "Speculative Decoding (Multi-Token Prediction)",
+            subtitle = "Drafts multiple tokens ahead per step for up to 2.2x faster GPU responses; best for coding and structured tasks (disable on CPU if freeform chat feels slower)",
             checked = config.enableMtp,
             onCheckedChange = { onUpdateConfig(config.copy(enableMtp = it)) },
         )
         ToggleSettingRow(
-            title = "ARM64 FPCR Flush-to-Zero (FZ bit 24)",
-            subtitle = "Eliminate subnormal FP32 penalties in NEON/SIMD",
+            title = "Agentic Tool Calling & Assistant Actions",
+            subtitle = "Allow the model to invoke on-device assistant tools (clock, calculator, hardware status, persistent notes, and system actions)",
+            checked = config.enableAgentTools,
+            onCheckedChange = { onUpdateConfig(config.copy(enableAgentTools = it)) },
+        )
+        ToggleSettingRow(
+            title = "Subnormal Float Flush-to-Zero (ARM64 FPCR.FZ)",
+            subtitle = "Flushes tiny denormalized floating-point numbers directly to zero in hardware to prevent microcode stalls during neural matrix math",
             checked = config.enableFpcrFlushToZero,
             onCheckedChange = { onUpdateConfig(config.copy(enableFpcrFlushToZero = it)) },
         )
         ToggleSettingRow(
-            title = "VM Page Cache Warmup (fadvise64)",
-            subtitle = "Prefetch model weights sequentially before engine init",
+            title = "Sequential Model Weight Prefetch (VM Read-Ahead)",
+            subtitle = "Pre-warms the Linux page cache with model weights via fadvise64 before initialization to reduce first-token latency",
             checked = config.enableVmPageWarmup,
             onCheckedChange = { onUpdateConfig(config.copy(enableVmPageWarmup = it)) },
         )
         ToggleSettingRow(
-            title = "Low-Latency Timer Slack & Barriers",
-            subtitle = "Tighten prctl timer slack, nice -4, and DSB/ISB barriers",
+            title = "Low-Latency Thread Priority & Timer Slack",
+            subtitle = "Boosts inference thread scheduling priority (nice -4) and tightens kernel timer slack for steadier token streaming",
             checked = config.enableLowLatencyThread,
             onCheckedChange = { onUpdateConfig(config.copy(enableLowLatencyThread = it)) },
         )
         ToggleSettingRow(
-            title = "SoC Thermal Guard (>= 78°C Downshift)",
-            subtitle = "Auto-downshift Prime-Only to Big+Prime under thermal load",
+            title = "Automatic Overheat Protection (Thermal Guard ≥ 78°C)",
+            subtitle = "Automatically shifts Prime-Core-Only workloads onto Big + Prime cores when device temperature reaches 78°C to prevent OS thermal throttling",
             checked = config.enableThermalGuard,
             onCheckedChange = { onUpdateConfig(config.copy(enableThermalGuard = it)) },
         )
@@ -223,7 +242,8 @@ fun SettingsSheetBody(
             onSelect = { onUpdateConfig(config.copy(coreAffinity = it)) },
         )
         SliderSettingRow(
-            label = "CPU Threads",
+            label = "CPU Inference Thread Count",
+            subtitle = "Worker threads used for CPU inference and tokenization (4 threads is optimal for most 8-core phones)",
             value = config.cpuThreadCount.toFloat(),
             range = 1f..8f,
             formatValue = { "${it.roundToInt()}" },
@@ -239,11 +259,11 @@ fun SettingsSheetBody(
 
         HorizontalDivider()
 
-        // Reasoning & Sampler
-        SectionTitle("Reasoning & Sampler")
+        // Reasoning, Sampling & Assistant Persona
+        SectionTitle("Reasoning, Sampling & Assistant Persona")
         ToggleSettingRow(
-            title = "Enable Thinking",
-            subtitle = "Stream model reasoning tokens in thought channel",
+            title = "Extended Reasoning (Thinking Mode)",
+            subtitle = "Allow the model to work through complex problems step-by-step in a collapsible thought card before answering",
             checked = config.enableThinking,
             onCheckedChange = { onUpdateConfig(config.copy(enableThinking = it)) },
         )
@@ -254,28 +274,32 @@ fun SettingsSheetBody(
             )
         }
         SliderSettingRow(
-            label = "Temperature",
+            label = "Response Creativity (Temperature)",
+            subtitle = "Lower values produce focused, deterministic answers; higher values increase creativity and variety",
             value = config.temperature.toFloat(),
             range = 0f..1.5f,
             formatValue = { String.format(Locale.US, "%.2f", it) },
             onCommit = { onUpdateConfig(config.copy(temperature = (it * 100f).roundToInt() / 100.0)) },
         )
         SliderSettingRow(
-            label = "Top-K",
+            label = "Vocabulary Cutoff (Top-K)",
+            subtitle = "Limits each token step to the K most likely candidate words",
             value = config.topK.toFloat(),
             range = 1f..100f,
             formatValue = { "${it.roundToInt()}" },
             onCommit = { onUpdateConfig(config.copy(topK = it.roundToInt())) },
         )
         SliderSettingRow(
-            label = "Top-P",
+            label = "Nucleus Probability (Top-P)",
+            subtitle = "Samples only from the smallest set of words whose cumulative probability reaches P",
             value = config.topP.toFloat(),
             range = 0.1f..1.0f,
             formatValue = { String.format(Locale.US, "%.2f", it) },
             onCommit = { onUpdateConfig(config.copy(topP = (it * 100f).roundToInt() / 100.0)) },
         )
         SliderSettingRow(
-            label = "Max Output Tokens",
+            label = "Maximum Response Length (Tokens)",
+            subtitle = "Upper limit on generated tokens per reply (including reasoning tokens)",
             value = config.maxOutputTokens.toFloat(),
             range = 256f..4096f,
             formatValue = { "${it.roundToInt()}" },
@@ -304,11 +328,19 @@ private fun SectionTitle(title: String) {
 @Composable
 private fun BackendSelectorRow(
     label: String,
+    subtitle: String? = null,
     selected: BackendType,
     onSelect: (BackendType) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+        if (!subtitle.isNullOrBlank()) {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             BackendType.entries.forEachIndexed { index, backend ->
                 SegmentedButton(
@@ -328,13 +360,24 @@ private fun AffinitySelector(
     onSelect: (CoreAffinityMode) -> Unit,
 ) {
     val labels = mapOf(
-        CoreAffinityMode.ALL_CORES to "All Cores",
-        CoreAffinityMode.BIG_AND_PRIME to "Big + Prime",
-        CoreAffinityMode.PRIME_ONLY to "Prime Only",
-        CoreAffinityMode.EFFICIENCY_ONLY to "Efficiency",
+        CoreAffinityMode.ALL_CORES to "All CPU Cores",
+        CoreAffinityMode.BIG_AND_PRIME to "Performance Cores (Big + Prime)",
+        CoreAffinityMode.PRIME_ONLY to "Peak Single-Core (Prime Only)",
+        CoreAffinityMode.EFFICIENCY_ONLY to "Battery Saver (Efficiency Cores)",
+    )
+    val descriptions = mapOf(
+        CoreAffinityMode.ALL_CORES to "Schedules threads across every available CPU core (Little, Big, and Prime).",
+        CoreAffinityMode.BIG_AND_PRIME to "Pins inference threads to high-performance Big and Prime cores for the best sustained speed.",
+        CoreAffinityMode.PRIME_ONLY to "Pins threads exclusively to the highest-clocked Prime core(s) for minimum single-thread latency.",
+        CoreAffinityMode.EFFICIENCY_ONLY to "Restricts threads to low-power Efficiency (Little) cores to minimize heat and battery drain.",
     )
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("ARM big.LITTLE Core Affinity", style = MaterialTheme.typography.bodyMedium)
+        Text("Processor Core Scheduling Policy", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            text = descriptions[selected].orEmpty(),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CoreAffinityMode.entries.forEach { mode ->
                 FilterChip(
@@ -372,7 +415,7 @@ private fun SiliconTelemetryCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Live Silicon Telemetry", style = MaterialTheme.typography.titleSmall)
+                Text("Live Processor & Memory Telemetry", style = MaterialTheme.typography.titleSmall)
                 Surface(
                     shape = RoundedCornerShape(50),
                     color = if (telemetry?.nativeLoaded == true) {
@@ -382,7 +425,7 @@ private fun SiliconTelemetryCard(
                     },
                 ) {
                     Text(
-                        text = if (telemetry?.nativeLoaded == true) "libslop_hw.so active" else "JVM / Fallback",
+                        text = if (telemetry?.nativeLoaded == true) "Native ARM64 Active" else "JVM Fallback",
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                     )
@@ -397,7 +440,7 @@ private fun SiliconTelemetryCard(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            text = "Thermal Guard active: Prime-Only downshifted to Big+Prime",
+                            text = "Overheat Protection Active: Shifted from Prime-Only to Performance Cores (Big + Prime)",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -409,13 +452,14 @@ private fun SiliconTelemetryCard(
                     telemetry.timerSlackNs > 0L -> "${telemetry.timerSlackNs} ns"
                     else -> "Default"
                 }
+                val fzStatus = if (telemetry.flushToZeroActive) "Enabled" else "Disabled"
                 Text(
                     text = buildString {
-                        appendLine("Arch: ${telemetry.arch} · Mask: ${telemetry.activeAffinityMaskHex}")
-                        appendLine("FPCR: ${telemetry.fpcrHex} (FZ=${telemetry.flushToZeroActive}) · Slack: $slackLabel")
-                        appendLine("CTR_EL0 L1 I/D: ${telemetry.l1ICacheLineBytes}B / ${telemetry.l1DCacheLineBytes}B · Timer: ${telemetry.timerFreqMhz} MHz")
-                        appendLine("RAM: ${telemetry.availRamMb}/${telemetry.totalRamMb} MB · Temp: $thermal")
-                        append("VM: ${telemetry.lastVmAction}")
+                        appendLine("Architecture: ${telemetry.arch} · Core Mask: ${telemetry.activeAffinityMaskHex}")
+                        appendLine("Flush-to-Zero (FPCR ${telemetry.fpcrHex}): $fzStatus · Timer Slack: $slackLabel")
+                        appendLine("L1 Cache Line (Inst/Data): ${telemetry.l1ICacheLineBytes}B / ${telemetry.l1DCacheLineBytes}B · Counter: ${telemetry.timerFreqMhz} MHz")
+                        appendLine("Available Memory: ${telemetry.availRamMb} / ${telemetry.totalRamMb} MB · Device Temp: $thermal")
+                        append("Memory Page Cache: ${telemetry.lastVmAction}")
                     },
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 )
@@ -428,7 +472,7 @@ private fun SiliconTelemetryCard(
                                 color = MaterialTheme.colorScheme.surfaceContainerHighest,
                             ) {
                                 Text(
-                                    text = "C${core.coreIndex} ${core.tier} ${core.curFreqKhz / 1000}/${core.maxFreqKhz / 1000}MHz",
+                                    text = "Core ${core.coreIndex} (${core.tier}) ${core.curFreqKhz / 1000}/${core.maxFreqKhz / 1000} MHz",
                                     style = MaterialTheme.typography.labelSmall,
                                     modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                                 )
@@ -450,7 +494,7 @@ private fun SiliconTelemetryCard(
                         if (isBenchmarking) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                         } else {
-                            Text("Run NEON SIMD Benchmark")
+                            Text("Run SIMD Vector Compute Benchmark")
                         }
                     }
                     if (telemetry.neonGflops > 0.0) {
@@ -468,7 +512,7 @@ private fun SiliconTelemetryCard(
                     enabled = !isBusy && !isBenchmarking,
                     modifier = Modifier.fillMaxWidth().heightIn(min = minTouchSize()),
                 ) {
-                    Text("Purge Cold Model Pages")
+                    Text("Release Cached Model Weights from RAM")
                 }
 
                 if (telemetry.machineCodeDisassembly.isNotEmpty()) {
@@ -480,10 +524,10 @@ private fun SiliconTelemetryCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Text("Raw AArch64 Machine Code", style = MaterialTheme.typography.labelLarge)
+                        Text("View Native ARM64 Assembly Instructions", style = MaterialTheme.typography.labelLarge)
                         Icon(
                             if (showDisassembly) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Toggle machine code disassembly",
+                            contentDescription = "Toggle native ARM64 assembly instructions",
                         )
                     }
                     AnimatedVisibility(visible = showDisassembly) {
@@ -514,7 +558,7 @@ private fun ThinkingBudgetControl(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("Thinking Budget", style = MaterialTheme.typography.bodyMedium)
+            Text("Reasoning Token Budget", style = MaterialTheme.typography.bodyMedium)
             FilterChip(
                 selected = isUnlimited,
                 onClick = { onBudgetChange(if (isUnlimited) 1024 else -1) },
@@ -523,7 +567,7 @@ private fun ThinkingBudgetControl(
         }
         if (!isUnlimited) {
             SliderSettingRow(
-                label = "Max Reasoning Tokens",
+                label = "Maximum Reasoning Tokens",
                 value = budget.coerceIn(128, 4096).toFloat(),
                 range = 128f..4096f,
                 formatValue = { "${it.roundToInt()}" },
@@ -565,6 +609,7 @@ private fun ToggleSettingRow(
 @Composable
 private fun SliderSettingRow(
     label: String,
+    subtitle: String? = null,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
     formatValue: (Float) -> String,
@@ -577,11 +622,18 @@ private fun SliderSettingRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(label, style = MaterialTheme.typography.bodyLarge)
             Text(
                 text = formatValue(draft),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        if (!subtitle.isNullOrBlank()) {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Slider(
@@ -600,7 +652,12 @@ private fun SystemPromptEditor(
 ) {
     var draft by remember(currentPrompt) { mutableStateOf(currentPrompt) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("System Prompt", style = MaterialTheme.typography.titleSmall)
+        Text("Assistant Persona & System Instructions", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "Defines the assistant's tone, role, and custom instructions across conversations",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
@@ -613,7 +670,7 @@ private fun SystemPromptEditor(
                 onClick = { onApply(draft) },
                 modifier = Modifier.align(Alignment.End).heightIn(min = minTouchSize()),
             ) {
-                Text("Apply Prompt")
+                Text("Apply Instructions")
             }
         }
     }

@@ -11,9 +11,11 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.ExperimentalFlags
 import com.google.ai.edge.litertlm.LiteRtLmJniException
+import com.google.ai.edge.litertlm.LogSeverity
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.ThinkingConfig
+import com.google.ai.edge.litertlm.tool
 import com.slopware.androidllm.domain.BackendType
 import com.slopware.androidllm.domain.ChatMessage
 import com.slopware.androidllm.domain.CoreAffinityMode
@@ -25,10 +27,13 @@ import com.slopware.androidllm.domain.SiliconTelemetry
 import com.slopware.androidllm.domain.StreamDelta
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -46,6 +51,16 @@ class LiteRtLmEngine(
     private val appContext = context.applicationContext ?: context
     private val mutex = Mutex()
     private val generation = AtomicLong(0L)
+    private val cleanupScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+
+    @Volatile
+    private var latestConfig: LlmConfig = LlmConfig()
+    private val agentToolSet = AgentToolSet(
+        context = appContext,
+        hardwareController = hardwareController,
+        configProvider = { latestConfig },
+    )
+    private val deviceActionOpenApiTool = DeviceActionOpenApiTool(context = appContext)
 
     private var engine: Engine? = null
     @Volatile
@@ -53,10 +68,28 @@ class LiteRtLmEngine(
     private var activeKey: EngineKey? = null
 
     override suspend fun initialize(config: LlmConfig) {
+        latestConfig = config
         val startGen = generation.get()
         withContext(ioDispatcher) {
             mutex.withLock {
-                initializeEngineLocked(config, withVision = false, expectedGeneration = startGen)
+                val targetKey = EngineKey(
+                    modelPath = config.modelPath,
+                    backend = config.backend,
+                    visionBackend = config.visionBackend,
+                    cpuThreadCount = config.cpuThreadCount,
+                    enableMtp = config.enableMtp,
+                )
+                val alreadyInitialized = engine?.isInitialized() == true && (
+                    activeKey == targetKey || activeKey == targetKey.copy(visionBackend = null)
+                    )
+                if (!alreadyInitialized) {
+                    initializeEngineLocked(
+                        config = config,
+                        withVision = true,
+                        visionRequired = false,
+                        expectedGeneration = startGen,
+                    )
+                }
             }
         }
     }
@@ -66,6 +99,7 @@ class LiteRtLmEngine(
         userMessage: ChatMessage,
         config: LlmConfig,
     ): Flow<StreamDelta> = flow {
+        latestConfig = config
         val startGen = generation.get()
         val needsVision = userMessage.imagePath != null ||
             history.any { !it.imagePath.isNullOrBlank() && File(it.imagePath).isFile }
@@ -83,7 +117,12 @@ class LiteRtLmEngine(
                     activeKey == targetKey.copy(visionBackend = activeKey?.visionBackend)
                 )
             if (engine?.isInitialized() != true || !keyMatches) {
-                initializeEngineLocked(config, withVision = needsVision, expectedGeneration = startGen)
+                initializeEngineLocked(
+                    config = config,
+                    withVision = true,
+                    visionRequired = needsVision,
+                    expectedGeneration = startGen,
+                )
             } else {
                 // Re-apply thermal-guarded affinity, low-latency slack/nice, and FPCR.FZ before decode.
                 applyHardwareGuard(config)
@@ -134,12 +173,12 @@ class LiteRtLmEngine(
         activeConversation?.let { conv ->
             if (conv.isAlive) runCatching { conv.cancelProcess() }
         }
-        if (mutex.tryLock()) {
-            try {
+        // Dispatch blocking JNI Conversation/Engine teardown (e.g., MTP drafter destructor) onto ioDispatcher
+        // so ViewModel.onCleared() during LIFECYCLER_STOP_ACTIVITY never blocks the UI thread.
+        cleanupScope.launch {
+            mutex.withLock {
                 closeConversationLocked()
                 closeEngineLocked()
-            } finally {
-                mutex.unlock()
             }
         }
     }
@@ -149,6 +188,7 @@ class LiteRtLmEngine(
     private fun initializeEngineLocked(
         config: LlmConfig,
         withVision: Boolean,
+        visionRequired: Boolean = false,
         withAudio: Boolean = false,
         expectedGeneration: Long,
     ) {
@@ -179,6 +219,8 @@ class LiteRtLmEngine(
         )
 
         val newEngine = Engine(engineConfig)
+        // Silence benign LiteRT-LM native INFO/WARNING spam (e.g., mel_filterbank.cc:163) in logcat.
+        runCatching { Engine.setNativeMinLogSeverity(LogSeverity.ERROR) }
         try {
             newEngine.initialize()
             if (generation.get() != expectedGeneration) {
@@ -198,9 +240,30 @@ class LiteRtLmEngine(
             throw e
         } catch (e: LiteRtLmJniException) {
             if (newEngine.isInitialized()) runCatching { newEngine.close() }
+            if (withVision && !visionRequired) {
+                // Fall back cleanly to text-only init when the loaded .litertlm lacks a vision encoder.
+                initializeEngineLocked(
+                    config = config,
+                    withVision = false,
+                    visionRequired = false,
+                    withAudio = withAudio,
+                    expectedGeneration = expectedGeneration,
+                )
+                return
+            }
             throw IllegalStateException("Failed to initialize ${config.backend} engine: ${e.message ?: "native error"}", e)
         } catch (e: IllegalStateException) {
             if (newEngine.isInitialized()) runCatching { newEngine.close() }
+            if (withVision && !visionRequired) {
+                initializeEngineLocked(
+                    config = config,
+                    withVision = false,
+                    visionRequired = false,
+                    withAudio = withAudio,
+                    expectedGeneration = expectedGeneration,
+                )
+                return
+            }
             throw IllegalStateException("Engine initialization error: ${e.message ?: "invalid state"}", e)
         }
     }
@@ -212,9 +275,15 @@ class LiteRtLmEngine(
                 Role.MODEL -> msg.text.takeIf { it.isNotBlank() }?.let { Message.model(it) }
             }
         }
+        val tools = if (config.enableAgentTools) {
+            listOf(tool(agentToolSet), tool(deviceActionOpenApiTool))
+        } else {
+            emptyList()
+        }
         return ConversationConfig(
             systemInstruction = config.systemPrompt.takeIf { it.isNotBlank() }?.let { Contents.of(it) },
             initialMessages = initialMessages,
+            tools = tools,
             samplerConfig = SamplerConfig(
                 topK = config.topK,
                 topP = config.topP,

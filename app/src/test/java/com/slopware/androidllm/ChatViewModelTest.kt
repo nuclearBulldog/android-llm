@@ -444,4 +444,55 @@ class ChatViewModelTest {
         assertEquals("", vm.uiState.value.partialAnswer)
         assertEquals("", vm.uiState.value.partialThought)
     }
+
+    @Test
+    fun handleAssistantIntentPopulatesDraftAndAutoSendsWhenModelConfigured() = runTest(testDispatcher) {
+        val engine = FakeLlmEngine().apply {
+            cannedDeltas = listOf(StreamDelta(textDelta = "It is 3:00 PM."))
+        }
+        val repo = FakeChatRepository(initialConfig = LlmConfig(modelPath = "/models/gemma.litertlm"))
+        val vm = createViewModel(engine, repo)
+        advanceUntilIdle()
+
+        // Share / ProcessText without autoSend populates composer and image attachment.
+        vm.handleAssistantIntent(prompt = "  Summarize this article  ", imagePath = "/tmp/shared.jpg", autoSend = false)
+        assertEquals("Summarize this article", vm.uiState.value.inputText)
+        assertEquals("/tmp/shared.jpg", vm.uiState.value.attachedImagePath)
+        assertTrue(vm.uiState.value.activeMessages.isEmpty())
+
+        // Assistant query with autoSend = true immediately dispatches generation and skips redundant text-only init on image.
+        vm.handleAssistantIntent(prompt = "What time is it?", imagePath = null, autoSend = true)
+        advanceUntilIdle()
+        assertEquals("", vm.uiState.value.inputText)
+        assertEquals(2, vm.uiState.value.activeMessages.size)
+        assertEquals("What time is it?", vm.uiState.value.activeMessages[0].text)
+        assertEquals("It is 3:00 PM.", vm.uiState.value.activeMessages[1].text)
+    }
+
+    @Test
+    fun imageMessageSkipsTextOnlyEnsureInitializedAndAgentToolsTogglePersists() = runTest(testDispatcher) {
+        val engine = FakeLlmEngine().apply {
+            cannedDeltas = listOf(StreamDelta(textDelta = "Described image"))
+        }
+        val repo = FakeChatRepository(initialConfig = LlmConfig(modelPath = "/models/gemma.litertlm"))
+        val vm = createViewModel(engine, repo)
+        advanceUntilIdle()
+
+        // Sending an attached image delegates initialization to streamMessage instead of pre-initializing withVision=false.
+        vm.updateInput("Describe this photo")
+        vm.attachImage("/tmp/photo.jpg")
+        vm.sendMessage()
+        advanceUntilIdle()
+
+        assertEquals(0, engine.initializedConfigs.size)
+        assertEquals("/tmp/photo.jpg", engine.lastUserMessage?.imagePath)
+        assertEquals("Described image", vm.uiState.value.activeMessages.last().text)
+
+        // Toggling enableAgentTools persists in config without re-initializing the loaded Engine.
+        vm.updateConfig(vm.uiState.value.config.copy(enableAgentTools = false))
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.config.enableAgentTools)
+        assertFalse(repo.config.value.enableAgentTools)
+        assertEquals(0, engine.initializedConfigs.size)
+    }
 }

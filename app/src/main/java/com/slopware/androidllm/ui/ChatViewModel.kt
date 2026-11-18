@@ -131,6 +131,36 @@ class ChatViewModel(
         _uiState.update { it.copy(attachedImagePath = path) }
     }
 
+    /**
+     * Handles incoming Android Assistant, Voice Command, Share, or Process-Text intents by starting
+     * a fresh session with the extracted [prompt] and/or [imagePath] and optionally sending immediately.
+     */
+    fun handleAssistantIntent(
+        prompt: String?,
+        imagePath: String? = null,
+        autoSend: Boolean = false,
+    ) {
+        val cleanPrompt = prompt?.trim().orEmpty()
+        val cleanImage = imagePath?.trim()?.takeIf { it.isNotEmpty() }
+        cancelGeneration(preservePartial = true)
+        _uiState.update {
+            it.copy(
+                activeSessionId = null,
+                activeMessages = emptyList(),
+                inputText = cleanPrompt,
+                attachedImagePath = cleanImage,
+                partialAnswer = "",
+                partialThought = "",
+                errorMessage = null,
+            )
+        }
+        if (autoSend && _uiState.value.config.modelPath.isNotBlank() &&
+            (cleanPrompt.isNotEmpty() || cleanImage != null)
+        ) {
+            sendMessage()
+        }
+    }
+
     fun sendMessage() {
         val state = _uiState.value
         if (state.isGenerating || state.isInitializing) return
@@ -247,7 +277,7 @@ class ChatViewModel(
 
     fun updateConfig(config: LlmConfig) {
         val prev = _uiState.value.config
-        val engineChanged = EngineKey.from(config) != initializedEngineKey
+        val engineChanged = EngineKey.from(config) != (initializedEngineKey ?: EngineKey.from(prev))
         val tuningChanged = config.enableFpcrFlushToZero != prev.enableFpcrFlushToZero ||
             config.coreAffinity != prev.coreAffinity ||
             config.enableLowLatencyThread != prev.enableLowLatencyThread ||
@@ -499,9 +529,16 @@ class ChatViewModel(
         finalizeActiveRun = finalizeRef
         generationJob = viewModelScope.launch {
             try {
-                // Join any matching preload instead of racing two Engine.initialize() calls.
-                initJob?.join()
-                ensureInitialized(config)
+                val needsVision = !userMessage.imagePath.isNullOrBlank() ||
+                    historyBeforeUser.any { !it.imagePath.isNullOrBlank() }
+                if (needsVision) {
+                    // Skip text-only ensureInitialized so streamMessage initializes once with visionBackend enabled.
+                    initJob?.cancel()
+                } else {
+                    // Join any matching preload instead of racing two Engine.initialize() calls.
+                    initJob?.join()
+                    ensureInitialized(config)
+                }
                 _uiState.update {
                     it.copy(isGenerating = true, partialAnswer = "", partialThought = "", errorMessage = null)
                 }
@@ -524,6 +561,7 @@ class ChatViewModel(
                             }
                         }
                     }
+                initializedEngineKey = EngineKey.from(config)
                 finalize(true)
             } catch (e: CancellationException) {
                 finalize(true)
