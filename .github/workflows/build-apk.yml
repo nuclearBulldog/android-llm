@@ -14,9 +14,9 @@ on:
       prerelease:
         description: "Mark GitHub Release as pre-release"
         type: boolean
-        default: true
+        default: false
       tag_name:
-        description: "Release tag name (optional for workflow_dispatch, e.g. v0.1.0-dev.1)"
+        description: "Release tag name (optional for workflow_dispatch, e.g. v0.1.10)"
         type: string
         default: ""
 
@@ -31,9 +31,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
+      version_code: ${{ steps.meta.outputs.version_code }}
       version_name: ${{ steps.meta.outputs.version_name }}
       tag_name: ${{ steps.meta.outputs.tag_name }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      apk_name: ${{ steps.stage.outputs.apk_name }}
+      apk_sha256: ${{ steps.stage.outputs.apk_sha256 }}
 
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +56,6 @@ jobs:
           INPUT_TAG_NAME: ${{ inputs.tag_name }}
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             TAG_NAME="${GITHUB_REF_NAME}"
             VERSION_NAME="${TAG_NAME#v}"
@@ -61,18 +63,25 @@ jobs:
             TAG_NAME="${INPUT_TAG_NAME}"
             VERSION_NAME="${TAG_NAME#v}"
           else
-            VERSION_NAME="0.1.0-dev.${GITHUB_RUN_NUMBER}+${SHORT_SHA}"
-            TAG_NAME="v0.1.0-dev.${GITHUB_RUN_NUMBER}"
+            VERSION_NAME="0.1.${GITHUB_RUN_NUMBER}"
+            TAG_NAME="v0.1.${GITHUB_RUN_NUMBER}"
           fi
 
-          if [ "${INPUT_PRERELEASE}" = "true" ] || [[ "${VERSION_NAME}" == *-dev* || "${VERSION_NAME}" == *-alpha* || "${VERSION_NAME}" == *-beta* || "${VERSION_NAME}" == *-rc* ]]; then
+          # Never use '+' in VERSION_NAME or TAG_NAME (GitHub Releases rewrites '+' to '.').
+          VERSION_NAME="${VERSION_NAME//+/.}"
+          TAG_NAME="${TAG_NAME//+/.}"
+
+          if { [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${INPUT_PRERELEASE}" = "true" ]; } || \
+             [[ "${VERSION_NAME}" == *-dev* || "${VERSION_NAME}" == *-alpha* || "${VERSION_NAME}" == *-beta* || "${VERSION_NAME}" == *-rc* ]]; then
             IS_PRERELEASE="true"
           else
             IS_PRERELEASE="false"
           fi
 
+          version_code=$((100 + GITHUB_RUN_NUMBER))
+
           {
-            echo "version_code=${GITHUB_RUN_NUMBER}"
+            echo "version_code=${version_code}"
             echo "version_name=${VERSION_NAME}"
             echo "tag_name=${TAG_NAME}"
             echo "is_prerelease=${IS_PRERELEASE}"
@@ -87,7 +96,7 @@ jobs:
             echo "SIGNING_STORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
             echo "Configured release keystore from secrets."
           else
-            echo "SIGNING_KEYSTORE_BASE64 not set; falling back to debug keystore for in-development release APK."
+            echo "SIGNING_KEYSTORE_BASE64 not set; using persistent project keystore app/keystore/slopware-community.p12."
           fi
 
       - name: Run unit tests and build arm64-v8a APKs
@@ -111,35 +120,39 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
 
       - name: Stage APKs and checksums
+        id: stage
         run: |
-          mkdir -p dist
+          mkdir -p dist dist/debug
           V="${{ steps.meta.outputs.version_name }}"
-          cp app/build/outputs/apk/release/app-release.apk "dist/com.slopware.androidllm-v${V}-arm64-v8a-release.apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "dist/com.slopware.androidllm-v${V}-arm64-v8a-debug.apk"
-          (cd dist && sha256sum \
-            "com.slopware.androidllm-v${V}-arm64-v8a-release.apk" \
-            "com.slopware.androidllm-v${V}-arm64-v8a-debug.apk" \
-            > "com.slopware.androidllm-v${V}-SHA256SUMS.txt")
+          APK_NAME="com.slopware.androidllm-v${V}-arm64-v8a.apk"
+          cp app/build/outputs/apk/release/app-release.apk "dist/${APK_NAME}"
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/debug/com.slopware.androidllm-v${V}-arm64-v8a-debug.apk"
+          (cd dist && sha256sum "com.slopware.androidllm-v${V}-arm64-v8a.apk" > "com.slopware.androidllm-v${V}-arm64-v8a.apk.sha256")
+          APK_SHA256="$(awk '{print $1}' "dist/${APK_NAME}.sha256")"
+          {
+            echo "apk_name=${APK_NAME}"
+            echo "apk_sha256=${APK_SHA256}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
           name: com.slopware.androidllm-arm64-v8a-release
           path: |
-            dist/com.slopware.androidllm-v*-arm64-v8a-release.apk
-            dist/com.slopware.androidllm-v*-SHA256SUMS.txt
+            dist/com.slopware.androidllm-v*-arm64-v8a.apk
+            dist/com.slopware.androidllm-v*-arm64-v8a.apk.sha256
           if-no-files-found: error
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: com.slopware.androidllm-arm64-v8a-debug
-          path: dist/com.slopware.androidllm-v*-arm64-v8a-debug.apk
+          path: dist/debug/com.slopware.androidllm-v*-arm64-v8a-debug.apk
           if-no-files-found: error
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -151,12 +164,6 @@ jobs:
           name: com.slopware.androidllm-arm64-v8a-release
           path: release-apks
 
-      - name: Download debug APK
-        uses: actions/download-artifact@v4
-        with:
-          name: com.slopware.androidllm-arm64-v8a-debug
-          path: release-apks
-
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -164,7 +171,10 @@ jobs:
           tag_name: ${{ needs.build.outputs.tag_name }}
           prerelease: ${{ needs.build.outputs.is_prerelease == 'true' }}
           generate_release_notes: true
+          body: |
+            ### Obtainium / Direct APK Verification
+            - **APK**: `${{ needs.build.outputs.apk_name }}`
+            - **Version**: `${{ needs.build.outputs.version_name }}` (`versionCode ${{ needs.build.outputs.version_code }}`)
+            - **SHA-256**: `${{ needs.build.outputs.apk_sha256 }}`
           files: |
-            release-apks/com.slopware.androidllm-*-arm64-v8a-release.apk
-            release-apks/com.slopware.androidllm-*-arm64-v8a-debug.apk
-            release-apks/com.slopware.androidllm-*-SHA256SUMS.txt
+            release-apks/com.slopware.androidllm-v*-arm64-v8a.apk

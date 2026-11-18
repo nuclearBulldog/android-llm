@@ -17,38 +17,42 @@ android {
         applicationId = "com.slopware.androidllm"
         minSdk = 26
         targetSdk = 37
-        versionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 1
-        versionName = providers.gradleProperty("versionName").orNull ?: "0.1.0-dev"
+        versionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 100
+        versionName = providers.gradleProperty("versionName").orNull ?: "0.1.0"
         ndk {
             abiFilters += "arm64-v8a"
         }
     }
 
-    val releaseStoreFile = System.getenv("SIGNING_STORE_FILE")?.takeIf { it.isNotBlank() }?.let(::file)
-    val hasReleaseSigning = releaseStoreFile?.isFile == true &&
+    val envStoreFile = System.getenv("SIGNING_STORE_FILE")?.takeIf { it.isNotBlank() }?.let(::file)
+    val hasEnvSigning = envStoreFile?.isFile == true &&
         !System.getenv("SIGNING_STORE_PASSWORD").isNullOrBlank() &&
         !System.getenv("SIGNING_KEY_ALIAS").isNullOrBlank() &&
         !System.getenv("SIGNING_KEY_PASSWORD").isNullOrBlank()
+    val communityStoreFile = file("keystore/slopware-community.p12")
+    val hasPersistentSigning = hasEnvSigning || communityStoreFile.isFile
 
-    if (hasReleaseSigning) {
+    if (hasPersistentSigning) {
         signingConfigs {
             create("release") {
-                storeFile = releaseStoreFile
-                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
-                keyAlias = System.getenv("SIGNING_KEY_ALIAS")
-                keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+                storeFile = if (hasEnvSigning) envStoreFile else communityStoreFile
+                storePassword = if (hasEnvSigning) System.getenv("SIGNING_STORE_PASSWORD") else "slopware"
+                keyAlias = if (hasEnvSigning) System.getenv("SIGNING_KEY_ALIAS") else "slopware"
+                keyPassword = if (hasEnvSigning) System.getenv("SIGNING_KEY_PASSWORD") else "slopware"
             }
         }
     }
 
     buildTypes {
+        val persistentSigning = signingConfigs.getByName(if (hasPersistentSigning) "release" else "debug")
         debug {
             versionNameSuffix = "-debug"
+            signingConfig = persistentSigning
         }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName(if (hasReleaseSigning) "release" else "debug")
+            signingConfig = persistentSigning
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

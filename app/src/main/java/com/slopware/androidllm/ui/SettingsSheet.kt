@@ -52,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.slopware.androidllm.domain.BackendType
 import com.slopware.androidllm.domain.CoreAffinityMode
@@ -119,12 +120,13 @@ fun SettingsSheetBody(
                 text = "Settings & Performance Tuning",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f).padding(end = 12.dp),
             )
             OutlinedButton(
                 onClick = onOpenModelHub,
                 modifier = Modifier.heightIn(min = minTouchSize()),
             ) {
-                Text("Models")
+                Text("Models", maxLines = 1, softWrap = false)
             }
         }
 
@@ -390,7 +392,6 @@ private fun AffinitySelector(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SiliconTelemetryCard(
     telemetry: SiliconTelemetry?,
@@ -415,7 +416,11 @@ private fun SiliconTelemetryCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Live Processor & Memory Telemetry", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "Live Processor & Memory Telemetry",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                )
                 Surface(
                     shape = RoundedCornerShape(50),
                     color = if (telemetry?.nativeLoaded == true) {
@@ -425,8 +430,10 @@ private fun SiliconTelemetryCard(
                     },
                 ) {
                     Text(
-                        text = if (telemetry?.nativeLoaded == true) "Native ARM64 Active" else "JVM Fallback",
+                        text = if (telemetry?.nativeLoaded == true) "ARM64 Active" else "JVM Fallback",
                         style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        softWrap = false,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                     )
                 }
@@ -455,55 +462,59 @@ private fun SiliconTelemetryCard(
                 val fzStatus = if (telemetry.flushToZeroActive) "Enabled" else "Disabled"
                 Text(
                     text = buildString {
-                        appendLine("Architecture: ${telemetry.arch} · Core Mask: ${telemetry.activeAffinityMaskHex}")
-                        appendLine("Flush-to-Zero (FPCR ${telemetry.fpcrHex}): $fzStatus · Timer Slack: $slackLabel")
-                        appendLine("L1 Cache Line (Inst/Data): ${telemetry.l1ICacheLineBytes}B / ${telemetry.l1DCacheLineBytes}B · Counter: ${telemetry.timerFreqMhz} MHz")
-                        appendLine("Available Memory: ${telemetry.availRamMb} / ${telemetry.totalRamMb} MB · Device Temp: $thermal")
-                        append("Memory Page Cache: ${telemetry.lastVmAction}")
+                        appendLine("Architecture: ${telemetry.arch} (Mask ${telemetry.activeAffinityMaskHex})")
+                        appendLine("Flush-to-Zero: $fzStatus (FPCR ${telemetry.fpcrHex})")
+                        appendLine("Timer Slack: $slackLabel · Counter: ${telemetry.timerFreqMhz} MHz")
+                        appendLine("L1 Cache Line: ${telemetry.l1ICacheLineBytes}B Inst / ${telemetry.l1DCacheLineBytes}B Data")
+                        appendLine("Memory: ${telemetry.availRamMb} / ${telemetry.totalRamMb} MB free")
+                        appendLine("Device Temp: $thermal")
+                        append("Page Cache: ${telemetry.lastVmAction}")
                     },
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 )
 
                 if (telemetry.cores.isNotEmpty()) {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        telemetry.cores.forEach { core ->
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        telemetry.cores.chunked(2).forEach { pair ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                Text(
-                                    text = "Core ${core.coreIndex} (${core.tier}) ${core.curFreqKhz / 1000}/${core.maxFreqKhz / 1000} MHz",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                                )
+                                pair.forEach { core ->
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        modifier = Modifier.weight(1f),
+                                    ) {
+                                        Text(
+                                            text = "C${core.coreIndex} ${core.tier} · ${core.curFreqKhz / 1000}/${core.maxFreqKhz / 1000} MHz",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                        )
+                                    }
+                                }
+                                if (pair.size == 1) Spacer(modifier = Modifier.weight(1f))
                             }
                         }
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                Button(
+                    onClick = onRunBenchmark,
+                    enabled = !isBenchmarking,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = minTouchSize()),
                 ) {
-                    Button(
-                        onClick = onRunBenchmark,
-                        enabled = !isBenchmarking,
-                        modifier = Modifier.heightIn(min = minTouchSize()),
-                    ) {
-                        if (isBenchmarking) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    if (isBenchmarking) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        val benchLabel = if (telemetry.neonGflops > 0.0) {
+                            "Run SIMD Benchmark (${String.format(Locale.US, "%.2f GFLOPS", telemetry.neonGflops)})"
                         } else {
-                            Text("Run SIMD Vector Compute Benchmark")
+                            "Run SIMD Vector Benchmark"
                         }
-                    }
-                    if (telemetry.neonGflops > 0.0) {
-                        Text(
-                            text = String.format(Locale.US, "%.2f GFLOPS", telemetry.neonGflops),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                        )
+                        Text(benchLabel, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
 
@@ -512,7 +523,7 @@ private fun SiliconTelemetryCard(
                     enabled = !isBusy && !isBenchmarking,
                     modifier = Modifier.fillMaxWidth().heightIn(min = minTouchSize()),
                 ) {
-                    Text("Release Cached Model Weights from RAM")
+                    Text("Release Cached Model Weights from RAM", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
 
                 if (telemetry.machineCodeDisassembly.isNotEmpty()) {
@@ -524,7 +535,11 @@ private fun SiliconTelemetryCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Text("View Native ARM64 Assembly Instructions", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            text = "View Native ARM64 Assembly Instructions",
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.weight(1f).padding(end = 8.dp),
+                        )
                         Icon(
                             if (showDisassembly) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                             contentDescription = "Toggle native ARM64 assembly instructions",
@@ -558,11 +573,15 @@ private fun ThinkingBudgetControl(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("Reasoning Token Budget", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = "Reasoning Token Budget",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+            )
             FilterChip(
                 selected = isUnlimited,
                 onClick = { onBudgetChange(if (isUnlimited) 1024 else -1) },
-                label = { Text("Unlimited (-1)") },
+                label = { Text("Unlimited (-1)", maxLines = 1, softWrap = false) },
             )
         }
         if (!isUnlimited) {
@@ -620,13 +639,20 @@ private fun SliderSettingRow(
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+            )
             Text(
                 text = formatValue(draft),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                softWrap = false,
             )
         }
         if (!subtitle.isNullOrBlank()) {

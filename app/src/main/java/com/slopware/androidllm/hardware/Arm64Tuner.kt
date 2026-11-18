@@ -31,6 +31,9 @@ class Arm64Tuner(
     private var lastNeonGflops: Double = 0.0
 
     @Volatile
+    private var lastFpcrValue: Long = 0L
+
+    @Volatile
     private var lastVmAction: String = "Idle"
 
     @Volatile
@@ -128,8 +131,11 @@ class Arm64Tuner(
             configureLowLatencyThread(config.enableLowLatencyThread)
         }
         if (nativeLoaded) {
+            if (applyNative || lastFpcrValue == 0L) {
+                lastFpcrValue = runCatching { nativeSetFpcrFlushToZero(config.enableFpcrFlushToZero) }.getOrDefault(0L)
+            }
+            fpcrValue = lastFpcrValue
             if (applyNative) {
-                fpcrValue = runCatching { nativeSetFpcrFlushToZero(config.enableFpcrFlushToZero) }.getOrDefault(0L)
                 runCatching { nativePinThreadAffinity(mask) }
             }
             val regs = runCatching { nativeReadSiliconRegs() }.getOrDefault(0L)
@@ -150,7 +156,7 @@ class Arm64Tuner(
         }
 
         val (availRamMb, totalRamMb) = readMemInfoMb()
-        val flushToZeroActive = if (nativeLoaded && applyNative) {
+        val flushToZeroActive = if (nativeLoaded && fpcrValue != 0L) {
             (fpcrValue and FPCR_FZ_BIT) != 0L
         } else {
             config.enableFpcrFlushToZero
